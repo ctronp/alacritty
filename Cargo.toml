@@ -8,5 +8,9 @@ members = [
 
 [profile.release]
 lto = "thin"
-debug = 1
+debug = 0
 incremental = false
+panic = "abort"
+codegen-units = 1
+strip = true
+opt-level = 3
