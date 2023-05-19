@@ -7,14 +7,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## 0.13.0-dev
 
+### Packaging
+
+- Minimum Rust version has been bumped to 1.65.0
+
 ### Changed
 
 - Mode-specific bindings can now be bound in any mode for easier macros
+- `--help` output is more compact now and uses more neutral palette
 
 ### Fixed
 
 - Character `;` inside the `URI` in `OSC 8` sequence breaking the URI
 - Selection on last line not updating correctly on resize
+- Keyboard input not working on macOS with some IMEs like Fig.io
+- Very long startup times on Wayland systems with broken xdg-portal setup.
+- Error on startup with `GLX` when using old mesa platforms
 
 ## 0.12.0
 
