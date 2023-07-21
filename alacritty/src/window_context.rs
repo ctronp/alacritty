@@ -21,7 +21,7 @@ use raw_window_handle::HasRawDisplayHandle;
 use serde_json as json;
 #[cfg(all(feature = "wayland", not(any(target_os = "macos", windows))))]
 use wayland_client::EventQueue;
-use winit::event::{Event as WinitEvent, ModifiersState, WindowEvent};
+use winit::event::{Event as WinitEvent, Modifiers, WindowEvent};
 use winit::event_loop::{EventLoopProxy, EventLoopWindowTarget};
 use winit::window::WindowId;
 
@@ -55,10 +55,8 @@ pub struct WindowContext {
     event_queue: Vec<WinitEvent<'static, Event>>,
     terminal: Arc<FairMutex<Term<EventProxy>>>,
     cursor_blink_timed_out: bool,
-    modifiers: ModifiersState,
+    modifiers: Modifiers,
     search_state: SearchState,
-    received_count: usize,
-    suppress_chars: bool,
     notifier: Notifier,
     font_size: Size,
     mouse: Mouse,
@@ -70,7 +68,7 @@ pub struct WindowContext {
     master_fd: RawFd,
     #[cfg(not(windows))]
     shell_pid: u32,
-    ipc_config: Vec<(String, serde_yaml::Value)>,
+    ipc_config: Vec<toml::Value>,
     config: Rc<UiConfig>,
 }
 
@@ -248,9 +246,7 @@ impl WindowContext {
             config,
             notifier: Notifier(loop_tx),
             cursor_blink_timed_out: Default::default(),
-            suppress_chars: Default::default(),
             message_buffer: Default::default(),
-            received_count: Default::default(),
             search_state: Default::default(),
             event_queue: Default::default(),
             ipc_config: Default::default(),
@@ -273,13 +269,12 @@ impl WindowContext {
             // Apply each option, removing broken ones.
             let mut i = 0;
             while i < self.ipc_config.len() {
-                let (key, value) = &self.ipc_config[i];
-
-                match config.replace(key, value.clone()) {
+                let option = &self.ipc_config[i];
+                match config.replace(option.clone()) {
                     Err(err) => {
                         error!(
                             target: LOG_TARGET_IPC_CONFIG,
-                            "Unable to override option '{}': {}", key, err
+                            "Unable to override option '{}': {}", option, err
                         );
                         self.ipc_config.swap_remove(i);
                     },
@@ -367,21 +362,9 @@ impl WindowContext {
             self.ipc_config.clear();
         } else {
             for option in &ipc_config.options {
-                // Separate config key/value.
-                let (key, value) = match option.split_once('=') {
-                    Some(split) => split,
-                    None => {
-                        error!(
-                            target: LOG_TARGET_IPC_CONFIG,
-                            "'{}': IPC config option missing value", option
-                        );
-                        continue;
-                    },
-                };
-
-                // Try and parse value as yaml.
-                match serde_yaml::from_str(value) {
-                    Ok(value) => self.ipc_config.push((key.to_owned(), value)),
+                // Try and parse option as toml.
+                match toml::from_str(option) {
+                    Ok(value) => self.ipc_config.push(value),
                     Err(err) => error!(
                         target: LOG_TARGET_IPC_CONFIG,
                         "'{}': Invalid IPC config value: {:?}", option, err
@@ -436,8 +419,6 @@ impl WindowContext {
         let context = ActionContext {
             cursor_blink_timed_out: &mut self.cursor_blink_timed_out,
             message_buffer: &mut self.message_buffer,
-            received_count: &mut self.received_count,
-            suppress_chars: &mut self.suppress_chars,
             search_state: &mut self.search_state,
             modifiers: &mut self.modifiers,
             font_size: &mut self.font_size,
@@ -484,7 +465,7 @@ impl WindowContext {
                 &terminal,
                 &self.config,
                 &self.mouse,
-                self.modifiers,
+                self.modifiers.state(),
             );
             self.mouse.hint_highlight_dirty = false;
         }

@@ -3,26 +3,24 @@ use std::fmt::{self, Formatter};
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use log::error;
+use log::{error, warn};
 use serde::de::{Error as SerdeError, MapAccess, Visitor};
 use serde::{self, Deserialize, Deserializer};
 use unicode_width::UnicodeWidthChar;
-use winit::event::{ModifiersState, VirtualKeyCode};
+use winit::keyboard::{Key, KeyLocation, ModifiersState};
 
 use alacritty_config_derive::{ConfigDeserialize, SerdeReplace};
-use alacritty_terminal::config::{
-    Config as TerminalConfig, Percentage, Program, LOG_TARGET_CONFIG,
-};
+use alacritty_terminal::config::{Config as TerminalConfig, Program, LOG_TARGET_CONFIG};
 use alacritty_terminal::term::search::RegexSearch;
 
 use crate::config::bell::BellConfig;
 use crate::config::bindings::{
-    self, Action, Binding, Key, KeyBinding, ModeWrapper, ModsWrapper, MouseBinding,
+    self, Action, Binding, BindingKey, KeyBinding, ModeWrapper, ModsWrapper, MouseBinding,
 };
 use crate::config::color::Colors;
 use crate::config::debug::Debug;
 use crate::config::font::Font;
-use crate::config::mouse::Mouse;
+use crate::config::mouse::{Mouse, MouseBindings};
 use crate::config::window::WindowConfig;
 
 /// Regex used for the default URL hint.
@@ -38,6 +36,7 @@ pub struct UiConfig {
     /// Window configuration.
     pub window: WindowConfig,
 
+    /// Mouse configuration.
     pub mouse: Mouse,
 
     /// Debug options.
@@ -57,9 +56,6 @@ pub struct UiConfig {
     /// RGB values for colors.
     pub colors: Colors,
 
-    /// Should draw bold text with brighter colors instead of bold font.
-    pub draw_bold_text_with_bright_colors: bool,
-
     /// Path where config was loaded from.
     #[config(skip)]
     pub config_paths: Vec<PathBuf>,
@@ -75,37 +71,49 @@ pub struct UiConfig {
     #[config(flatten)]
     pub terminal_config: TerminalConfig,
 
+    /// Keyboard configuration.
+    keyboard: Keyboard,
+
+    /// Should draw bold text with brighter colors instead of bold font.
+    #[config(deprecated = "use colors.draw_bold_text_with_bright_colors instead")]
+    draw_bold_text_with_bright_colors: bool,
+
     /// Keybindings.
-    key_bindings: KeyBindings,
+    #[config(deprecated = "use keyboard.bindings instead")]
+    key_bindings: Option<KeyBindings>,
 
     /// Bindings for the mouse.
-    mouse_bindings: MouseBindings,
+    #[config(deprecated = "use mouse.bindings instead")]
+    mouse_bindings: Option<MouseBindings>,
 
-    /// Background opacity from 0.0 to 1.0.
-    #[config(deprecated = "use window.opacity instead")]
-    background_opacity: Option<Percentage>,
+    /// Configuration file imports.
+    ///
+    /// This is never read since the field is directly accessed through the config's
+    /// [`toml::Value`], but still present to prevent unused field warnings.
+    import: Vec<String>,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
             live_config_reload: true,
-            alt_send_esc: Default::default(),
             #[cfg(unix)]
             ipc_socket: true,
-            font: Default::default(),
-            window: Default::default(),
-            mouse: Default::default(),
-            debug: Default::default(),
+            draw_bold_text_with_bright_colors: Default::default(),
+            terminal_config: Default::default(),
+            mouse_bindings: Default::default(),
             config_paths: Default::default(),
             key_bindings: Default::default(),
-            mouse_bindings: Default::default(),
-            terminal_config: Default::default(),
-            background_opacity: Default::default(),
-            bell: Default::default(),
+            alt_send_esc: Default::default(),
+            keyboard: Default::default(),
+            import: Default::default(),
+            window: Default::default(),
             colors: Default::default(),
-            draw_bold_text_with_bright_colors: Default::default(),
+            mouse: Default::default(),
+            debug: Default::default(),
             hints: Default::default(),
+            font: Default::default(),
+            bell: Default::default(),
         }
     }
 }
@@ -113,38 +121,67 @@ impl Default for UiConfig {
 impl UiConfig {
     /// Generate key bindings for all keyboard hints.
     pub fn generate_hint_bindings(&mut self) {
+        // Check which key bindings is most likely to be the user's configuration.
+        //
+        // Both will be non-empty due to the presence of the default keybindings.
+        let key_bindings = if let Some(key_bindings) = self.key_bindings.as_mut() {
+            &mut key_bindings.0
+        } else {
+            &mut self.keyboard.bindings.0
+        };
+
         for hint in &self.hints.enabled {
-            let binding = match hint.binding {
+            let binding = match &hint.binding {
                 Some(binding) => binding,
                 None => continue,
             };
 
             let binding = KeyBinding {
-                trigger: binding.key,
+                trigger: binding.key.clone(),
                 mods: binding.mods.0,
                 mode: binding.mode.mode,
                 notmode: binding.mode.not_mode,
                 action: Action::Hint(hint.clone()),
             };
 
-            self.key_bindings.0.push(binding);
+            key_bindings.push(binding);
         }
     }
 
     #[inline]
     pub fn window_opacity(&self) -> f32 {
-        self.background_opacity.unwrap_or(self.window.opacity).as_f32()
+        self.window.opacity.as_f32()
     }
 
     #[inline]
     pub fn key_bindings(&self) -> &[KeyBinding] {
-        self.key_bindings.0.as_slice()
+        if let Some(key_bindings) = self.key_bindings.as_ref() {
+            &key_bindings.0
+        } else {
+            &self.keyboard.bindings.0
+        }
     }
 
     #[inline]
     pub fn mouse_bindings(&self) -> &[MouseBinding] {
-        self.mouse_bindings.0.as_slice()
+        if let Some(mouse_bindings) = self.mouse_bindings.as_ref() {
+            &mouse_bindings.0
+        } else {
+            &self.mouse.bindings.0
+        }
     }
+
+    #[inline]
+    pub fn draw_bold_text_with_bright_colors(&self) -> bool {
+        self.colors.draw_bold_text_with_bright_colors || self.draw_bold_text_with_bright_colors
+    }
+}
+
+/// Keyboard configuration.
+#[derive(ConfigDeserialize, Default, Clone, Debug, PartialEq)]
+struct Keyboard {
+    /// Keybindings.
+    bindings: KeyBindings,
 }
 
 #[derive(SerdeReplace, Clone, Debug, PartialEq, Eq)]
@@ -165,34 +202,16 @@ impl<'de> Deserialize<'de> for KeyBindings {
     }
 }
 
-#[derive(SerdeReplace, Clone, Debug, PartialEq, Eq)]
-struct MouseBindings(Vec<MouseBinding>);
-
-impl Default for MouseBindings {
-    fn default() -> Self {
-        Self(bindings::default_mouse_bindings())
-    }
-}
-
-impl<'de> Deserialize<'de> for MouseBindings {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        Ok(Self(deserialize_bindings(deserializer, Self::default().0)?))
-    }
-}
-
-fn deserialize_bindings<'a, D, T>(
+pub fn deserialize_bindings<'a, D, T>(
     deserializer: D,
     mut default: Vec<Binding<T>>,
 ) -> Result<Vec<Binding<T>>, D::Error>
 where
     D: Deserializer<'a>,
-    T: Copy + Eq,
+    T: Clone + Eq,
     Binding<T>: Deserialize<'a>,
 {
-    let values = Vec::<serde_yaml::Value>::deserialize(deserializer)?;
+    let values = Vec::<toml::Value>::deserialize(deserializer)?;
 
     // Skip all invalid values.
     let mut bindings = Vec::with_capacity(values.len());
@@ -255,11 +274,15 @@ impl Default for Hints {
             enabled: vec![Hint {
                 content,
                 action,
+                persist: false,
                 post_processing: true,
                 mouse: Some(HintMouse { enabled: true, mods: Default::default() }),
                 binding: Some(HintBinding {
-                    key: Key::Keycode(VirtualKeyCode::U),
-                    mods: ModsWrapper(ModifiersState::SHIFT | ModifiersState::CTRL),
+                    key: BindingKey::Keycode {
+                        key: Key::Character("u".into()),
+                        location: KeyLocation::Standard,
+                    },
+                    mods: ModsWrapper(ModifiersState::SHIFT | ModifiersState::CONTROL),
                     mode: Default::default(),
                 }),
             }],
@@ -347,6 +370,10 @@ pub struct Hint {
     #[serde(default)]
     pub post_processing: bool,
 
+    /// Persist hints after selection.
+    #[serde(default)]
+    pub persist: bool,
+
     /// Hint mouse highlighting.
     pub mouse: Option<HintMouse>,
 
@@ -388,7 +415,7 @@ impl<'de> Deserialize<'de> for HintContent {
             {
                 let mut content = Self::Value::default();
 
-                while let Some((key, value)) = map.next_entry::<String, serde_yaml::Value>()? {
+                while let Some((key, value)) = map.next_entry::<String, toml::Value>()? {
                     match key.as_str() {
                         "regex" => match Option::<LazyRegex>::deserialize(value) {
                             Ok(regex) => content.regex = regex,
@@ -408,7 +435,8 @@ impl<'de> Deserialize<'de> for HintContent {
                                 );
                             },
                         },
-                        _ => (),
+                        "command" | "action" => (),
+                        key => warn!(target: LOG_TARGET_CONFIG, "Unrecognized hint field: {key}"),
                     }
                 }
 
@@ -429,9 +457,10 @@ impl<'de> Deserialize<'de> for HintContent {
 }
 
 /// Binding for triggering a keyboard hint.
-#[derive(Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HintBinding {
-    pub key: Key,
+    pub key: BindingKey,
     #[serde(default)]
     pub mods: ModsWrapper,
     #[serde(default)]

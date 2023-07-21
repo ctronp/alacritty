@@ -303,7 +303,7 @@ impl RenderableCell {
     }
 
     /// Get the RGB color from a cell's foreground color.
-    fn compute_fg_rgb(content: &mut RenderableContent<'_>, fg: Color, flags: Flags) -> Rgb {
+    fn compute_fg_rgb(content: &RenderableContent<'_>, fg: Color, flags: Flags) -> Rgb {
         let config = &content.config;
         match fg {
             Color::Spec(rgb) => match flags & Flags::DIM {
@@ -314,7 +314,7 @@ impl RenderableCell {
                 _ => rgb.into(),
             },
             Color::Named(ansi) => {
-                match (config.draw_bold_text_with_bright_colors, flags & Flags::DIM_BOLD) {
+                match (config.draw_bold_text_with_bright_colors(), flags & Flags::DIM_BOLD) {
                     // If no bright foreground is set, treat it like the BOLD flag doesn't exist.
                     (_, Flags::DIM_BOLD)
                         if ansi == NamedColor::Foreground
@@ -334,7 +334,7 @@ impl RenderableCell {
             },
             Color::Indexed(idx) => {
                 let idx = match (
-                    config.draw_bold_text_with_bright_colors,
+                    config.draw_bold_text_with_bright_colors(),
                     flags & Flags::DIM_BOLD,
                     idx,
                 ) {
@@ -351,7 +351,7 @@ impl RenderableCell {
 
     /// Get the RGB color from a cell's background color.
     #[inline]
-    fn compute_bg_rgb(content: &mut RenderableContent<'_>, bg: Color) -> Rgb {
+    fn compute_bg_rgb(content: &RenderableContent<'_>, bg: Color) -> Rgb {
         match bg {
             Color::Spec(rgb) => rgb.into(),
             Color::Named(ansi) => content.color(ansi as usize),

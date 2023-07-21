@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::iter;
 
-use winit::event::ModifiersState;
+use winit::keyboard::ModifiersState;
 
 use alacritty_terminal::grid::{BidirectionalIterator, Dimensions};
 use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point};
@@ -150,7 +150,12 @@ impl HintState {
             let bounds = self.matches[index].clone();
             let action = hint.action.clone();
 
-            self.stop();
+            // Exit hint mode unless it requires explicit dismissal.
+            if hint.persist {
+                self.keys.clear();
+            } else {
+                self.stop();
+            }
 
             // Hyperlinks take precedence over regex matches.
             let hyperlink = term.grid()[*bounds.start()].hyperlink();
