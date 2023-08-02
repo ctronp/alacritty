@@ -33,6 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - The default colorscheme is now based on base16 classic dark
 - IME popup now tries to not obscure the current cursor line
 - The double click threshold was raised to `400ms`
+- OSC 52 paste ability is now **disabled by default**; use `terminal.osc52` to adjust it
 
 ### Fixed
 
@@ -40,6 +41,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `Maximized` startup mode not filling the screen properly on GNOME Wayland
 - `OptionAsAlt` with `OnlyLeft`/`OnlyRight` settings not working properly on macOS
 - Default Vi key bindings for `Last`/`First` actions not working on X11/Wayland
+- Cut off wide characters in preedit string
 
 ### Removed
 

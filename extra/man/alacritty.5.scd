@@ -534,6 +534,20 @@ This section documents the *[cursor]* table of the configuration file.
 
 	Default: _0.15_
 
+# Terminal
+
+This section documents the *[terminal]* table of the configuration file.
+
+*osc52* "Disabled" | "OnlyCopy" | "OnlyPaste" | "CopyPaste"
+
+	Controls the ability to write to the system clipboard with the _OSC 52_
+	escape sequence. While this escape sequence is useful to copy contents
+	from the remote server, allowing any application to read from the clipboard
+	can be easily abused while not providing significant benefits over
+	explicitly pasting text.
+
+	Default: _"OnlyCopy"_
+
 # Mouse
 
 This section documents the *[mouse]* table of the configuration file.
@@ -634,7 +648,7 @@ _action_ or a _command_.
 		hovering over the hint text with all _mods_ pressed.
 
 Default: _[{
-	regex = "(mailto:|gemini:|gopher:|https:|http:|news:|file:|git:|ssh:|ftp:)[^\\u0000-\\u001F\\u007F-\\u009F<>\\"\\\\s{-}\\\\^⟨⟩`]+",++
+	regex = "(ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file:|git://|ssh:|ftp://)[^\\u0000-\\u001F\\u007F-\\u009F<>\\"\\\\s{-}\\\\^⟨⟩`]+",++
 hyperlinks = true,++
 post_processing = true,++
 persist = false,++

@@ -3,11 +3,13 @@ use std::ffi::{CStr, CString};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{fmt, ptr};
 
+use ahash::RandomState;
 use crossfont::Metrics;
 use glutin::context::{ContextApi, GlContext, PossiblyCurrentContext};
 use glutin::display::{GetGlDisplay, GlDisplay};
 use log::{debug, error, info, warn, LevelFilter};
 use once_cell::sync::OnceCell;
+use unicode_width::UnicodeWidthChar;
 
 use alacritty_terminal::index::Point;
 use alacritty_terminal::term::cell::Flags;
@@ -175,15 +177,30 @@ impl Renderer {
         size_info: &SizeInfo,
         glyph_cache: &mut GlyphCache,
     ) {
-        let cells = string_chars.enumerate().map(|(i, character)| RenderableCell {
-            point: Point::new(point.line, point.column + i),
-            character,
-            extra: None,
-            flags: Flags::empty(),
-            bg_alpha: 1.0,
-            fg,
-            bg,
-            underline: fg,
+        let mut skip_next = false;
+        let cells = string_chars.enumerate().filter_map(|(i, character)| {
+            if skip_next {
+                skip_next = false;
+                return None;
+            }
+
+            let mut flags = Flags::empty();
+            if character.width() == Some(2) {
+                flags.insert(Flags::WIDE_CHAR);
+                // Wide character is always followed by a spacer, so skip it.
+                skip_next = true;
+            }
+
+            Some(RenderableCell {
+                point: Point::new(point.line, point.column + i),
+                character,
+                extra: None,
+                flags: Flags::empty(),
+                bg_alpha: 1.0,
+                fg,
+                bg,
+                underline: fg,
+            })
         });
 
         self.draw_cells(size_info, glyph_cache, cells);
@@ -274,13 +291,13 @@ impl GlExtensions {
     ///
     /// This function will lazyly load OpenGL extensions.
     fn contains(extension: &str) -> bool {
-        static OPENGL_EXTENSIONS: OnceCell<HashSet<&'static str>> = OnceCell::new();
+        static OPENGL_EXTENSIONS: OnceCell<HashSet<&'static str, RandomState>> = OnceCell::new();
 
         OPENGL_EXTENSIONS.get_or_init(Self::load_extensions).contains(extension)
     }
 
     /// Load available OpenGL extensions.
-    fn load_extensions() -> HashSet<&'static str> {
+    fn load_extensions() -> HashSet<&'static str, RandomState> {
         unsafe {
             let extensions = gl::GetString(gl::EXTENSIONS);
 
@@ -297,7 +314,7 @@ impl GlExtensions {
             } else {
                 match CStr::from_ptr(extensions as *mut _).to_str() {
                     Ok(ext) => ext.split_whitespace().collect(),
-                    Err(_) => HashSet::new(),
+                    Err(_) => Default::default(),
                 }
             }
         }

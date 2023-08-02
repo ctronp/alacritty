@@ -11,7 +11,7 @@ rust-version = "1.65.0"
 
 [dependencies.alacritty_terminal]
 path = "../alacritty_terminal"
-version = "0.19.2-dev"
+version = "0.20.0-dev"
 default-features = false
 
 [dependencies.alacritty_config_derive]
@@ -23,11 +23,11 @@ path = "../alacritty_config"
 version = "0.1.2-dev"
 
 [dependencies]
+ahash = { version = "0.8.3", features = ["no-rng"] }
 bitflags = "2.2.1"
 clap = { version = "4.2.7", features = ["derive", "env"] }
 copypasta = { version = "0.8.1", default-features = false }
 crossfont = { version = "0.5.0", features = ["force_system_fontconfig"] }
-fnv = "1"
 glutin = { version = "0.30.4", default-features = false, features = ["egl", "wgl"] }
 home = "0.5.5"
 libc = "0.2"
