@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Support for dynamically loading conpty.dll on Windows
 - Support for keybindings with dead keys
 - `Back`/`Forward` mouse buttons support in bindings
+- Copy global IPC options (`-w -1`) for new windows
 
 ### Changed
 
@@ -34,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - IME popup now tries to not obscure the current cursor line
 - The double click threshold was raised to `400ms`
 - OSC 52 paste ability is now **disabled by default**; use `terminal.osc52` to adjust it
+- Apply `colors.transparent_background_colors` for selections, hints, and search matches
 
 ### Fixed
 
@@ -42,6 +44,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `OptionAsAlt` with `OnlyLeft`/`OnlyRight` settings not working properly on macOS
 - Default Vi key bindings for `Last`/`First` actions not working on X11/Wayland
 - Cut off wide characters in preedit string
+- Scrolling on touchscreens
 
 ### Removed
 
