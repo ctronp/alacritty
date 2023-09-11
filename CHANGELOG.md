@@ -20,6 +20,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Support for keybindings with dead keys
 - `Back`/`Forward` mouse buttons support in bindings
 - Copy global IPC options (`-w -1`) for new windows
+- Bindings to create and navigate tabs on macOS
+- Support startup notify protocol to raise initial window on Wayland/X11
+- Debug option `prefer_egl` to prioritize EGL over other display APIs
 
 ### Changed
 
@@ -45,6 +48,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Default Vi key bindings for `Last`/`First` actions not working on X11/Wayland
 - Cut off wide characters in preedit string
 - Scrolling on touchscreens
+- Double clicking on CSD titlebar not always maximizing a window on Wayland
 
 ### Removed
 
