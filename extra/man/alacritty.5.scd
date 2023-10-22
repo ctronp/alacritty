@@ -698,8 +698,10 @@ This section documents the *[keyboard]* table of the configuration file.
 
 		The regular keys like _"A"_, _"0"_, and _"Я"_ can be mapped directly
 		without any special syntax. Full list of named keys like _"F1"_ and the
-		syntax for dead keys can be found here:++
-https://docs.rs/winit/\*/winit/keyboard/enum.Key.html
+		syntax for dead keys can be found here:
+
+		https://docs.rs/winit/latest/winit/keyboard/enum.NamedKey.html++
+https://docs.rs/winit/latest/winit/keyboard/enum.Key.html#variant.Dead
 
 		Numpad keys are prefixed by _Numpad_: "NumpadEnter" | "NumpadAdd" |
 		"NumpadComma" | "NumpadDivide" | "NumpadEquals" | "NumpadSubtract" |
@@ -827,6 +829,38 @@ https://docs.rs/winit/\*/winit/keyboard/enum.Key.html
 			Move to end of whitespace separated word.
 		*Bracket*
 			Move to opposing bracket.
+		*ToggleNormalSelection*
+			Toggle normal vi selection.
+		*ToggleLineSelection*
+			Toggle line vi selection.
+		*ToggleBlockSelection*
+			Toggle block vi selection.
+		*ToggleSemanticSelection*
+			Toggle semantic vi selection.
+		*SearchNext*
+			Jump to the beginning of the next match.
+		*SearchPrevious*
+			Jump to the beginning of the previous match.
+		*SearchStart*
+			Jump to the next start of a match to the left of the origin.
+		*SearchEnd*
+			Jump to the next end of a match to the right of the origin.
+		*Open*
+			Launch the URL below the vi mode cursor.
+		*CenterAroundViCursor*
+			Centers the screen around the vi mode cursor.
+		*InlineSearchForward*
+			Search forward within the current line.
+		*InlineSearchBcakward*
+			Search backard within the current line.
+		*InlineSearchForwardShort*
+			Search forward within the current line, stopping just short of the character.
+		*InlineSearchBackwardShort*
+			Search backward within the current line, stopping just short of the character.
+		*InlineSearchNext*
+			Jump to the next inline search match.
+		*InlineSearchPrevious*
+			Jump to the previous inline search match.
 
 		_Search actions:_
 

@@ -15,7 +15,9 @@ use std::{env, f32, mem};
 
 use ahash::RandomState;
 use crossfont::{self, Size};
+use glutin::display::{Display as GlutinDisplay, GetGlDisplay};
 use log::{debug, error, info, warn};
+use raw_window_handle::HasRawDisplayHandle;
 use winit::event::{
     ElementState, Event as WinitEvent, Ime, Modifiers, MouseButton, StartCause,
     Touch as TouchEvent, WindowEvent,
@@ -23,13 +25,12 @@ use winit::event::{
 use winit::event_loop::{
     ControlFlow, DeviceEvents, EventLoop, EventLoopProxy, EventLoopWindowTarget,
 };
-use winit::window::raw_window_handle::HasRawDisplayHandle;
 use winit::window::WindowId;
 
 use alacritty_terminal::config::LOG_TARGET_CONFIG;
 use alacritty_terminal::event::{Event as TerminalEvent, EventListener, Notify};
 use alacritty_terminal::event_loop::Notifier;
-use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::grid::{BidirectionalIterator, Dimensions, Scroll};
 use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::search::{Match, RegexSearch};
@@ -178,6 +179,27 @@ impl Default for SearchState {
     }
 }
 
+/// Vi inline search state.
+pub struct InlineSearchState {
+    /// Whether inline search is currently waiting for search character input.
+    pub char_pending: bool,
+    pub character: Option<char>,
+
+    direction: Direction,
+    stop_short: bool,
+}
+
+impl Default for InlineSearchState {
+    fn default() -> Self {
+        Self {
+            direction: Direction::Right,
+            char_pending: Default::default(),
+            stop_short: Default::default(),
+            character: Default::default(),
+        }
+    }
+}
+
 pub struct ActionContext<'a, N, T> {
     pub notifier: &'a mut N,
     pub terminal: &'a mut Term<T>,
@@ -193,6 +215,7 @@ pub struct ActionContext<'a, N, T> {
     pub event_proxy: &'a EventLoopProxy<Event>,
     pub scheduler: &'a mut Scheduler,
     pub search_state: &'a mut SearchState,
+    pub inline_search_state: &'a mut InlineSearchState,
     pub font_size: &'a mut Size,
     pub dirty: &'a mut bool,
     pub occluded: &'a mut bool,
@@ -839,6 +862,30 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         *self.dirty = true;
     }
 
+    /// Get vi inline search state.
+    fn inline_search_state(&mut self) -> &mut InlineSearchState {
+        self.inline_search_state
+    }
+
+    /// Start vi mode inline search.
+    fn start_inline_search(&mut self, direction: Direction, stop_short: bool) {
+        self.inline_search_state.stop_short = stop_short;
+        self.inline_search_state.direction = direction;
+        self.inline_search_state.char_pending = true;
+    }
+
+    /// Jump to the next matching character in the line.
+    fn inline_search_next(&mut self) {
+        let direction = self.inline_search_state.direction;
+        self.inline_search(direction);
+    }
+
+    /// Jump to the next matching character in the line.
+    fn inline_search_previous(&mut self) {
+        let direction = self.inline_search_state.direction.opposite();
+        self.inline_search(direction);
+    }
+
     fn message(&self) -> Option<&Message> {
         self.message_buffer.message()
     }
@@ -1031,6 +1078,41 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         let timer_id = TimerId::new(Topic::BlinkTimeout, window_id);
 
         self.scheduler.schedule(event, blinking_timeout_interval, false, timer_id);
+    }
+
+    /// Perferm vi mode inline search in the specified direction.
+    fn inline_search(&mut self, direction: Direction) {
+        let c = match self.inline_search_state.character {
+            Some(c) => c,
+            None => return,
+        };
+        let mut buf = [0; 4];
+        let search_character = c.encode_utf8(&mut buf);
+
+        // Find next match in this line.
+        let vi_point = self.terminal.vi_mode_cursor.point;
+        let point = match direction {
+            Direction::Right => self.terminal.inline_search_right(vi_point, search_character),
+            Direction::Left => self.terminal.inline_search_left(vi_point, search_character),
+        };
+
+        // Jump to point if there's a match.
+        if let Ok(mut point) = point {
+            if self.inline_search_state.stop_short {
+                let grid = self.terminal.grid();
+                point = match direction {
+                    Direction::Right => {
+                        grid.iter_from(point).prev().map_or(point, |cell| cell.point)
+                    },
+                    Direction::Left => {
+                        grid.iter_from(point).next().map_or(point, |cell| cell.point)
+                    },
+                };
+            }
+
+            self.terminal.vi_goto_point(point);
+            self.mark_dirty();
+        }
     }
 }
 
@@ -1366,6 +1448,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                     | WindowEvent::Destroyed
                     | WindowEvent::ThemeChanged(_)
                     | WindowEvent::HoveredFile(_)
+                    | WindowEvent::RedrawRequested
                     | WindowEvent::Moved(_) => (),
                 }
             },
@@ -1374,8 +1457,8 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
             | WinitEvent::DeviceEvent { .. }
             | WinitEvent::LoopExiting
             | WinitEvent::Resumed
-            | WinitEvent::AboutToWait
-            | WinitEvent::RedrawRequested(_) => (),
+            | WinitEvent::MemoryWarning
+            | WinitEvent::AboutToWait => (),
         }
     }
 }
@@ -1386,6 +1469,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
 /// triggered.
 pub struct Processor {
     windows: HashMap<WindowId, WindowContext, RandomState>,
+    gl_display: Option<GlutinDisplay>,
     #[cfg(unix)]
     global_ipc_options: Vec<String>,
     cli_options: CliOptions,
@@ -1403,6 +1487,7 @@ impl Processor {
     ) -> Processor {
         Processor {
             cli_options,
+            gl_display: None,
             config: Rc::new(config),
             windows: Default::default(),
             #[cfg(unix)]
@@ -1423,6 +1508,7 @@ impl Processor {
         let window_context =
             WindowContext::initial(event_loop, proxy, self.config.clone(), options)?;
 
+        self.gl_display = Some(window_context.display.gl_context().display());
         self.windows.insert(window_context.id(), window_context);
 
         Ok(())
@@ -1471,7 +1557,8 @@ impl Processor {
         // Disable all device events, since we don't care about them.
         event_loop.listen_device_events(DeviceEvents::Never);
 
-        let result = event_loop.run(move |event, event_loop, control_flow| {
+        let mut initial_window_error = Ok(());
+        let result = event_loop.run(|event, event_loop| {
             if self.config.debug.print_events {
                 info!("winit event: {:?}", event);
             }
@@ -1497,13 +1584,29 @@ impl Processor {
                         proxy.clone(),
                         initial_window_options,
                     ) {
-                        // Log the error right away since we can't return it.
-                        eprintln!("Error: {}", err);
-                        *control_flow = ControlFlow::ExitWithCode(1);
+                        initial_window_error = Err(err);
+                        event_loop.exit();
                         return;
                     }
 
                     info!("Initialisation complete");
+                },
+                WinitEvent::LoopExiting => {
+                    match self.gl_display.take() {
+                        #[cfg(not(target_os = "macos"))]
+                        Some(glutin::display::Display::Egl(display)) => {
+                            // Ensure that all the windows are dropped, so the destructors for
+                            // Renderer and contexts ran.
+                            self.windows.clear();
+
+                            // SAFETY: the display is being destroyed after destroying all the
+                            // windows, thus no attempt to access the EGL state will be made.
+                            unsafe {
+                                display.terminate();
+                            }
+                        },
+                        _ => (),
+                    }
                 },
                 // NOTE: This event bypasses batching to minimize input latency.
                 WinitEvent::UserEvent(Event {
@@ -1550,10 +1653,10 @@ impl Processor {
                             window_context.write_ref_test_results();
                         }
 
-                        *control_flow = ControlFlow::Exit;
+                        event_loop.exit();
                     }
                 },
-                WinitEvent::RedrawRequested(window_id) => {
+                WinitEvent::WindowEvent { window_id, event: WindowEvent::RedrawRequested } => {
                     let window_context = match self.windows.get_mut(&window_id) {
                         Some(window_context) => window_context,
                         None => return,
@@ -1564,7 +1667,7 @@ impl Processor {
                         &proxy,
                         &mut clipboard,
                         &mut scheduler,
-                        WinitEvent::RedrawRequested(window_id),
+                        event,
                     );
 
                     window_context.draw(&mut scheduler);
@@ -1584,10 +1687,11 @@ impl Processor {
 
                     // Update the scheduler after event processing to ensure
                     // the event loop deadline is as accurate as possible.
-                    *control_flow = match scheduler.update() {
+                    let control_flow = match scheduler.update() {
                         Some(instant) => ControlFlow::WaitUntil(instant),
                         None => ControlFlow::Wait,
                     };
+                    event_loop.set_control_flow(control_flow);
                 },
                 // Process config update.
                 WinitEvent::UserEvent(Event { payload: EventType::ConfigReload(path), .. }) => {
@@ -1676,7 +1780,11 @@ impl Processor {
             }
         });
 
-        result.map_err(Into::into)
+        if initial_window_error.is_err() {
+            initial_window_error
+        } else {
+            result.map_err(Into::into)
+        }
     }
 
     /// Check if an event is irrelevant and can be skipped.
@@ -1694,9 +1802,7 @@ impl Processor {
                     | WindowEvent::HoveredFile(_)
                     | WindowEvent::Moved(_)
             ),
-            WinitEvent::Suspended { .. }
-            | WinitEvent::NewEvents { .. }
-            | WinitEvent::LoopExiting => true,
+            WinitEvent::Suspended { .. } | WinitEvent::NewEvents { .. } => true,
             _ => false,
         }
     }

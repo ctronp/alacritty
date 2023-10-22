@@ -8,8 +8,9 @@ use serde::{Deserialize, Deserializer};
 use toml::Value as SerdeValue;
 use winit::event::MouseButton;
 use winit::keyboard::Key::*;
-use winit::keyboard::{Key, KeyCode, KeyLocation, ModifiersState};
-use winit::platform::scancode::KeyCodeExtScancode;
+use winit::keyboard::NamedKey::*;
+use winit::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, NamedKey, PhysicalKey};
+use winit::platform::scancode::PhysicalKeyExtScancode;
 
 use alacritty_config_derive::{ConfigDeserialize, SerdeReplace};
 
@@ -331,6 +332,18 @@ pub enum ViAction {
     Open,
     /// Centers the screen around the vi mode cursor.
     CenterAroundViCursor,
+    /// Search forward within the current line.
+    InlineSearchForward,
+    /// Search backward within the current line.
+    InlineSearchBackward,
+    /// Search forward within the current line, stopping just short of the character.
+    InlineSearchForwardShort,
+    /// Search backward within the current line, stopping just short of the character.
+    InlineSearchBackwardShort,
+    /// Jump to the next inline search match.
+    InlineSearchNext,
+    /// Jump to the previous inline search match.
+    InlineSearchPrevious,
 }
 
 /// Search mode specific actions.
@@ -406,7 +419,7 @@ macro_rules! trigger {
         BindingKey::Keycode { key: Character($key.into()), location: KeyLocation::Standard }
     }};
     (KeyBinding, $key:expr,) => {{
-        BindingKey::Keycode { key: $key, location: KeyLocation::Standard }
+        BindingKey::Keycode { key: Named($key), location: KeyLocation::Standard }
     }};
     ($ty:ident, $key:expr,) => {{
         $key
@@ -506,6 +519,12 @@ pub fn default_key_bindings() -> Vec<KeyBinding> {
         "n",      ModifiersState::SHIFT,    +BindingMode::VI, ~BindingMode::SEARCH; ViAction::SearchPrevious;
         Enter,                              +BindingMode::VI, ~BindingMode::SEARCH; ViAction::Open;
         "z",                                +BindingMode::VI, ~BindingMode::SEARCH; ViAction::CenterAroundViCursor;
+        "f",                                +BindingMode::VI, ~BindingMode::SEARCH; ViAction::InlineSearchForward;
+        "f",      ModifiersState::SHIFT,    +BindingMode::VI, ~BindingMode::SEARCH; ViAction::InlineSearchBackward;
+        "t",                                +BindingMode::VI, ~BindingMode::SEARCH; ViAction::InlineSearchForwardShort;
+        "t",      ModifiersState::SHIFT,    +BindingMode::VI, ~BindingMode::SEARCH; ViAction::InlineSearchBackwardShort;
+        ";",                                +BindingMode::VI, ~BindingMode::SEARCH; ViAction::InlineSearchNext;
+        ",",                                +BindingMode::VI, ~BindingMode::SEARCH; ViAction::InlineSearchPrevious;
         "k",                                +BindingMode::VI, ~BindingMode::SEARCH; ViMotion::Up;
         "j",                                +BindingMode::VI, ~BindingMode::SEARCH; ViMotion::Down;
         "h",                                +BindingMode::VI, ~BindingMode::SEARCH; ViMotion::Left;
@@ -698,7 +717,7 @@ pub fn platform_key_bindings() -> Vec<KeyBinding> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum BindingKey {
-    Scancode(KeyCode),
+    Scancode(PhysicalKey),
     Keycode { key: Key, location: KeyLocation },
 }
 
@@ -709,7 +728,7 @@ impl<'a> Deserialize<'a> for BindingKey {
     {
         let value = SerdeValue::deserialize(deserializer)?;
         match u32::deserialize(value.clone()) {
-            Ok(scancode) => Ok(BindingKey::Scancode(KeyCode::from_scancode(scancode))),
+            Ok(scancode) => Ok(BindingKey::Scancode(PhysicalKey::from_scancode(scancode))),
             Err(_) => {
                 let keycode = String::deserialize(value.clone()).map_err(D::Error::custom)?;
                 let (key, location) = if keycode.chars().count() == 1 {
@@ -717,15 +736,15 @@ impl<'a> Deserialize<'a> for BindingKey {
                 } else {
                     // Translate legacy winit codes into their modern counterparts.
                     match keycode.as_str() {
-                        "Up" => (Key::ArrowUp, KeyLocation::Standard),
-                        "Back" => (Key::Backspace, KeyLocation::Standard),
-                        "Down" => (Key::ArrowDown, KeyLocation::Standard),
-                        "Left" => (Key::ArrowLeft, KeyLocation::Standard),
-                        "Right" => (Key::ArrowRight, KeyLocation::Standard),
+                        "Up" => (Key::Named(ArrowUp), KeyLocation::Standard),
+                        "Back" => (Key::Named(Backspace), KeyLocation::Standard),
+                        "Down" => (Key::Named(ArrowDown), KeyLocation::Standard),
+                        "Left" => (Key::Named(ArrowLeft), KeyLocation::Standard),
+                        "Right" => (Key::Named(ArrowRight), KeyLocation::Standard),
                         "At" => (Key::Character("@".into()), KeyLocation::Standard),
                         "Colon" => (Key::Character(":".into()), KeyLocation::Standard),
                         "Period" => (Key::Character(".".into()), KeyLocation::Standard),
-                        "Return" => (Key::Enter, KeyLocation::Standard),
+                        "Return" => (Key::Named(Enter), KeyLocation::Standard),
                         "LBracket" => (Key::Character("[".into()), KeyLocation::Standard),
                         "RBracket" => (Key::Character("]".into()), KeyLocation::Standard),
                         "Semicolon" => (Key::Character(";".into()), KeyLocation::Standard),
@@ -748,7 +767,7 @@ impl<'a> Deserialize<'a> for BindingKey {
                         "Key0" => (Key::Character("0".into()), KeyLocation::Standard),
 
                         // Special case numpad.
-                        "NumpadEnter" => (Key::Enter, KeyLocation::Numpad),
+                        "NumpadEnter" => (Key::Named(Enter), KeyLocation::Numpad),
                         "NumpadAdd" => (Key::Character("+".into()), KeyLocation::Numpad),
                         "NumpadComma" => (Key::Character(",".into()), KeyLocation::Numpad),
                         "NumpadDivide" => (Key::Character("/".into()), KeyLocation::Numpad),
@@ -765,8 +784,12 @@ impl<'a> Deserialize<'a> for BindingKey {
                         "Numpad8" => (Key::Character("8".into()), KeyLocation::Numpad),
                         "Numpad9" => (Key::Character("9".into()), KeyLocation::Numpad),
                         "Numpad0" => (Key::Character("0".into()), KeyLocation::Numpad),
-                        _ => (
+                        _ if keycode.starts_with("Dead") => (
                             Key::deserialize(value).map_err(D::Error::custom)?,
+                            KeyLocation::Standard,
+                        ),
+                        _ => (
+                            Key::Named(NamedKey::deserialize(value).map_err(D::Error::custom)?),
                             KeyLocation::Standard,
                         ),
                     }

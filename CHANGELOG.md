@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Bindings to create and navigate tabs on macOS
 - Support startup notify protocol to raise initial window on Wayland/X11
 - Debug option `prefer_egl` to prioritize EGL over other display APIs
+- Inline vi-mode search using `f`/`F`/`t`/`T`
 
 ### Changed
 
@@ -52,6 +53,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Scrolling on touchscreens
 - Double clicking on CSD titlebar not always maximizing a window on Wayland
 - Excessive memory usage when using regexes with a large number of possible states
+- `window.decorations_theme_variant` not live reloading
+- Copy/Paste being truncated to 64KiB on Wayland
+- X11 clipboard lagging behind sometimes
+- High wakeup count on Wayland due to clipboard polling
+- Blocking paste freezing alacritty on Wayland
+- `Command` modifier persisting after `Cmd + Tab` on macOS
+- Crash on exit when using NVIDIA binary drivers on Wayland
 
 ### Removed
 
