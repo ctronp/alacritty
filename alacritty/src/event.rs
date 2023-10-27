@@ -815,7 +815,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             //
             // We remove `\x1b` to ensure it's impossible for the pasted text to write the bracketed
             // paste end escape `\x1b[201~` and `\x03` since some shells incorrectly terminate
-            // bracketed paste on its receival.
+            // bracketed paste when they receive it.
             let filtered = text.replace(['\x1b', '\x03'], "");
             self.write_to_pty(filtered.into_bytes());
 
@@ -1080,7 +1080,7 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         self.scheduler.schedule(event, blinking_timeout_interval, false, timer_id);
     }
 
-    /// Perferm vi mode inline search in the specified direction.
+    /// Perform vi mode inline search in the specified direction.
     fn inline_search(&mut self, direction: Direction) {
         let c = match self.inline_search_state.character {
             Some(c) => c,
@@ -1551,14 +1551,15 @@ impl Processor {
         let mut scheduler = Scheduler::new(proxy.clone());
         let mut initial_window_options = Some(initial_window_options);
 
-        // NOTE: Since this takes a pointer to the winit event loop, it MUST be dropped first.
-        let mut clipboard = unsafe { Clipboard::new(event_loop.raw_display_handle()) };
-
         // Disable all device events, since we don't care about them.
         event_loop.listen_device_events(DeviceEvents::Never);
 
         let mut initial_window_error = Ok(());
-        let result = event_loop.run(|event, event_loop| {
+        let initial_window_error_loop = &mut initial_window_error;
+        // SAFETY: Since this takes a pointer to the winit event loop, it MUST be dropped first,
+        // which is done by `move` into event loop.
+        let mut clipboard = unsafe { Clipboard::new(event_loop.raw_display_handle()) };
+        let result = event_loop.run(move |event, event_loop| {
             if self.config.debug.print_events {
                 info!("winit event: {:?}", event);
             }
@@ -1572,7 +1573,7 @@ impl Processor {
                 // The event loop just got initialized. Create a window.
                 WinitEvent::Resumed => {
                     // Creating window inside event loop is required for platforms like macOS to
-                    // properly initialize state, like tab management. Othwerwise the first
+                    // properly initialize state, like tab management. Otherwise the first
                     // window won't handle tabs.
                     let initial_window_options = match initial_window_options.take() {
                         Some(initial_window_options) => initial_window_options,
@@ -1584,7 +1585,7 @@ impl Processor {
                         proxy.clone(),
                         initial_window_options,
                     ) {
-                        initial_window_error = Err(err);
+                        *initial_window_error_loop = Err(err);
                         event_loop.exit();
                         return;
                     }
