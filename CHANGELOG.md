@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Support startup notify protocol to raise initial window on Wayland/X11
 - Debug option `prefer_egl` to prioritize EGL over other display APIs
 - Inline vi-mode search using `f`/`F`/`t`/`T`
+- `window.blur` config option to request blur for transparent windows
 
 ### Changed
 
@@ -63,6 +64,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `Command` modifier persisting after `Cmd + Tab` on macOS
 - Crash on exit when using NVIDIA binary drivers on Wayland
 - `window.startup_mode` applied to window again when creating new tab
+- Crash when leaving search after resize
 
 ### Removed
 
