@@ -14,14 +14,13 @@ use glutin::config::GetGlConfig;
 use glutin::display::GetGlDisplay;
 #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
 use glutin::platform::x11::X11GlConfigExt;
-use log::{error, info};
+use log::info;
 use raw_window_handle::HasRawDisplayHandle;
 use serde_json as json;
 use winit::event::{Event as WinitEvent, Modifiers, WindowEvent};
 use winit::event_loop::{EventLoopProxy, EventLoopWindowTarget};
 use winit::window::WindowId;
 
-use alacritty_config::SerdeReplace;
 use alacritty_terminal::event::Event as TerminalEvent;
 use alacritty_terminal::event_loop::{EventLoop as PtyEventLoop, Msg, Notifier};
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -31,9 +30,7 @@ use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::tty;
 
-#[cfg(unix)]
-use crate::cli::IpcConfig;
-use crate::cli::WindowOptions;
+use crate::cli::{ParsedOptions, WindowOptions};
 use crate::clipboard::Clipboard;
 use crate::config::UiConfig;
 use crate::display::window::Window;
@@ -41,6 +38,7 @@ use crate::display::Display;
 use crate::event::{
     ActionContext, Event, EventProxy, InlineSearchState, Mouse, SearchState, TouchPurpose,
 };
+#[cfg(unix)]
 use crate::logging::LOG_TARGET_IPC_CONFIG;
 use crate::message_bar::MessageBuffer;
 use crate::scheduler::Scheduler;
@@ -67,7 +65,7 @@ pub struct WindowContext {
     master_fd: RawFd,
     #[cfg(not(windows))]
     shell_pid: u32,
-    ipc_config: Vec<toml::Value>,
+    window_config: ParsedOptions,
     config: Rc<UiConfig>,
 }
 
@@ -128,6 +126,7 @@ impl WindowContext {
         proxy: EventLoopProxy<Event>,
         config: Rc<UiConfig>,
         options: WindowOptions,
+        config_overrides: ParsedOptions,
     ) -> Result<Self, Box<dyn Error>> {
         // Get any window and take its GL config and display to build a new context.
         let (gl_display, gl_config) = {
@@ -164,7 +163,14 @@ impl WindowContext {
 
         let display = Display::new(window, gl_context, &config, tabbed)?;
 
-        Self::new(display, config, options, proxy)
+        let mut window_context = Self::new(display, config, options, proxy)?;
+
+        // Set the config overrides at startup.
+        //
+        // These are already applied to `config`, so no update is necessary.
+        window_context.window_config = config_overrides;
+
+        Ok(window_context)
     }
 
     /// Create a new terminal window context.
@@ -174,7 +180,7 @@ impl WindowContext {
         options: WindowOptions,
         proxy: EventLoopProxy<Event>,
     ) -> Result<Self, Box<dyn Error>> {
-        let mut pty_config = config.terminal_config.pty_config.clone();
+        let mut pty_config = config.pty_config();
         options.terminal_options.override_pty_config(&mut pty_config);
 
         let preserve_title = options.window_identity.title.is_some();
@@ -192,7 +198,7 @@ impl WindowContext {
         // This object contains all of the state about what's being displayed. It's
         // wrapped in a clonable mutex since both the I/O loop and display need to
         // access it.
-        let terminal = Term::new(&config.terminal_config, &display.size_info, event_proxy.clone());
+        let terminal = Term::new(config.term_options(), &display.size_info, event_proxy.clone());
         let terminal = Arc::new(FairMutex::new(terminal));
 
         // Create the PTY.
@@ -229,7 +235,7 @@ impl WindowContext {
         let _io_thread = event_loop.spawn();
 
         // Start cursor blinking, in case `Focused` isn't sent on startup.
-        if config.terminal_config.cursor.style().blinking {
+        if config.cursor.style().blinking {
             event_proxy.send_event(TerminalEvent::CursorBlinkingChange.into());
         }
 
@@ -250,9 +256,9 @@ impl WindowContext {
             cursor_blink_timed_out: Default::default(),
             inline_search_state: Default::default(),
             message_buffer: Default::default(),
+            window_config: Default::default(),
             search_state: Default::default(),
             event_queue: Default::default(),
-            ipc_config: Default::default(),
             modifiers: Default::default(),
             occluded: Default::default(),
             mouse: Default::default(),
@@ -266,37 +272,13 @@ impl WindowContext {
         let old_config = mem::replace(&mut self.config, new_config);
 
         // Apply ipc config if there are overrides.
-        if !self.ipc_config.is_empty() {
-            let mut config = (*self.config).clone();
-
-            // Apply each option, removing broken ones.
-            let mut i = 0;
-            while i < self.ipc_config.len() {
-                let option = &self.ipc_config[i];
-                match config.replace(option.clone()) {
-                    Err(err) => {
-                        error!(
-                            target: LOG_TARGET_IPC_CONFIG,
-                            "Unable to override option '{}': {}", option, err
-                        );
-                        self.ipc_config.swap_remove(i);
-                    },
-                    Ok(_) => i += 1,
-                }
-            }
-
-            self.config = Rc::new(config);
-        }
+        self.config = self.window_config.override_config_rc(self.config.clone());
 
         self.display.update_config(&self.config);
-        self.terminal.lock().update_config(&self.config.terminal_config);
+        self.terminal.lock().set_options(self.config.term_options());
 
         // Reload cursor if its thickness has changed.
-        if (old_config.terminal_config.cursor.thickness()
-            - self.config.terminal_config.cursor.thickness())
-        .abs()
-            > f32::EPSILON
-        {
+        if (old_config.cursor.thickness() - self.config.cursor.thickness()).abs() > f32::EPSILON {
             self.display.pending_update.set_cursor_dirty();
         }
 
@@ -359,26 +341,25 @@ impl WindowContext {
         self.dirty = true;
     }
 
-    /// Update the IPC config overrides.
+    /// Clear the window config overrides.
     #[cfg(unix)]
-    pub fn update_ipc_config(&mut self, config: Rc<UiConfig>, ipc_config: IpcConfig) {
-        // Clear previous IPC errors.
+    pub fn reset_window_config(&mut self, config: Rc<UiConfig>) {
+        // Clear previous window errors.
         self.message_buffer.remove_target(LOG_TARGET_IPC_CONFIG);
 
-        if ipc_config.reset {
-            self.ipc_config.clear();
-        } else {
-            for option in &ipc_config.options {
-                // Try and parse option as toml.
-                match toml::from_str(option) {
-                    Ok(value) => self.ipc_config.push(value),
-                    Err(err) => error!(
-                        target: LOG_TARGET_IPC_CONFIG,
-                        "'{}': Invalid IPC config value: {:?}", option, err
-                    ),
-                }
-            }
-        }
+        self.window_config.clear();
+
+        // Reload current config to pull new IPC config.
+        self.update_config(config);
+    }
+
+    /// Add new window config overrides.
+    #[cfg(unix)]
+    pub fn add_window_config(&mut self, config: Rc<UiConfig>, options: &ParsedOptions) {
+        // Clear previous window errors.
+        self.message_buffer.remove_target(LOG_TARGET_IPC_CONFIG);
+
+        self.window_config.extend_from_slice(options);
 
         // Reload current config to pull new IPC config.
         self.update_config(config);
@@ -399,7 +380,13 @@ impl WindowContext {
 
         // Request immediate re-draw if visual bell animation is not finished yet.
         if !self.display.visual_bell.completed() {
-            self.display.window.request_redraw();
+            // We can get an OS redraw which bypasses alacritty's frame throttling, thus
+            // marking the window as dirty when we don't have frame yet.
+            if self.display.window.has_frame {
+                self.display.window.request_redraw();
+            } else {
+                self.dirty = true;
+            }
         }
 
         // Redraw the window.
@@ -500,6 +487,7 @@ impl WindowContext {
         // Don't call `request_redraw` when event is `RedrawRequested` since the `dirty` flag
         // represents the current frame, but redraw is for the next frame.
         if self.dirty
+            && self.display.window.has_frame
             && !self.occluded
             && !matches!(event, WinitEvent::WindowEvent { event: WindowEvent::RedrawRequested, .. })
         {

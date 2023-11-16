@@ -29,7 +29,6 @@ use winit::platform::macos::{EventLoopWindowTargetExtMacOS, OptionAsAlt};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use winit::window::CursorIcon;
 
-use alacritty_terminal::ansi::{ClearMode, Handler};
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Boundary, Column, Direction, Point, Side};
@@ -37,6 +36,7 @@ use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::search::Match;
 use alacritty_terminal::term::{ClipboardType, Term, TermMode};
 use alacritty_terminal::vi_mode::ViMotion;
+use alacritty_terminal::vte::ansi::{ClearMode, Handler};
 
 use crate::clipboard::Clipboard;
 use crate::config::{
@@ -328,37 +328,33 @@ impl<T: EventListener> Execute<T> for Action {
             Action::IncreaseFontSize => ctx.change_font_size(FONT_SIZE_STEP),
             Action::DecreaseFontSize => ctx.change_font_size(FONT_SIZE_STEP * -1.),
             Action::ResetFontSize => ctx.reset_font_size(),
-            Action::ScrollPageUp => {
+            Action::ScrollPageUp
+            | Action::ScrollPageDown
+            | Action::ScrollHalfPageUp
+            | Action::ScrollHalfPageDown => {
                 // Move vi mode cursor.
                 let term = ctx.terminal_mut();
-                let scroll_lines = term.screen_lines() as i32;
-                term.vi_mode_cursor = term.vi_mode_cursor.scroll(term, scroll_lines);
+                let (scroll, amount) = match self {
+                    Action::ScrollPageUp => (Scroll::PageUp, term.screen_lines() as i32),
+                    Action::ScrollPageDown => (Scroll::PageDown, -(term.screen_lines() as i32)),
+                    Action::ScrollHalfPageUp => {
+                        let amount = term.screen_lines() as i32 / 2;
+                        (Scroll::Delta(amount), amount)
+                    },
+                    Action::ScrollHalfPageDown => {
+                        let amount = -(term.screen_lines() as i32 / 2);
+                        (Scroll::Delta(amount), amount)
+                    },
+                    _ => unreachable!(),
+                };
 
-                ctx.scroll(Scroll::PageUp);
-            },
-            Action::ScrollPageDown => {
-                // Move vi mode cursor.
-                let term = ctx.terminal_mut();
-                let scroll_lines = -(term.screen_lines() as i32);
-                term.vi_mode_cursor = term.vi_mode_cursor.scroll(term, scroll_lines);
+                let old_vi_cursor = term.vi_mode_cursor;
+                term.vi_mode_cursor = term.vi_mode_cursor.scroll(term, amount);
+                if old_vi_cursor != term.vi_mode_cursor {
+                    ctx.mark_dirty();
+                }
 
-                ctx.scroll(Scroll::PageDown);
-            },
-            Action::ScrollHalfPageUp => {
-                // Move vi mode cursor.
-                let term = ctx.terminal_mut();
-                let scroll_lines = term.screen_lines() as i32 / 2;
-                term.vi_mode_cursor = term.vi_mode_cursor.scroll(term, scroll_lines);
-
-                ctx.scroll(Scroll::Delta(scroll_lines));
-            },
-            Action::ScrollHalfPageDown => {
-                // Move vi mode cursor.
-                let term = ctx.terminal_mut();
-                let scroll_lines = -(term.screen_lines() as i32 / 2);
-                term.vi_mode_cursor = term.vi_mode_cursor.scroll(term, scroll_lines);
-
-                ctx.scroll(Scroll::Delta(scroll_lines));
+                ctx.scroll(scroll);
             },
             Action::ScrollLineUp => ctx.scroll(Scroll::Delta(1)),
             Action::ScrollLineDown => ctx.scroll(Scroll::Delta(-1)),
@@ -701,7 +697,7 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
     }
 
     pub fn mouse_wheel_input(&mut self, delta: MouseScrollDelta, phase: TouchPhase) {
-        let multiplier = self.ctx.config().terminal_config.scrolling.multiplier;
+        let multiplier = self.ctx.config().scrolling.multiplier;
         match delta {
             MouseScrollDelta::LineDelta(columns, lines) => {
                 let new_scroll_px_x = columns * self.ctx.size_info().cell_width();
@@ -1382,7 +1378,7 @@ mod tests {
                     false,
                 );
 
-                let mut terminal = Term::new(&cfg.terminal_config, &size, MockEventProxy);
+                let mut terminal = Term::new(cfg.term_options(), &size, MockEventProxy);
 
                 let mut mouse = Mouse {
                     click_state: $initial_state,

@@ -27,7 +27,6 @@ use winit::event_loop::{
 };
 use winit::window::WindowId;
 
-use alacritty_terminal::config::LOG_TARGET_CONFIG;
 use alacritty_terminal::event::{Event as TerminalEvent, EventListener, Notify};
 use alacritty_terminal::event_loop::Notifier;
 use alacritty_terminal::grid::{BidirectionalIterator, Dimensions, Scroll};
@@ -37,7 +36,7 @@ use alacritty_terminal::term::search::{Match, RegexSearch};
 use alacritty_terminal::term::{self, ClipboardType, Term, TermMode};
 
 #[cfg(unix)]
-use crate::cli::IpcConfig;
+use crate::cli::{IpcConfig, ParsedOptions};
 use crate::cli::{Options as CliOptions, WindowOptions};
 use crate::clipboard::Clipboard;
 use crate::config::ui_config::{HintAction, HintInternalAction};
@@ -45,10 +44,12 @@ use crate::config::{self, UiConfig};
 #[cfg(not(windows))]
 use crate::daemon::foreground_process_path;
 use crate::daemon::spawn_daemon;
+use crate::display::color::Rgb;
 use crate::display::hint::HintMatch;
 use crate::display::window::Window;
 use crate::display::{Display, Preedit, SizeInfo};
 use crate::input::{self, ActionContext as _, FONT_SIZE_STEP};
+use crate::logging::LOG_TARGET_CONFIG;
 use crate::message_bar::{Message, MessageBuffer};
 use crate::scheduler::{Scheduler, TimerId, Topic};
 use crate::window_context::WindowContext;
@@ -251,6 +252,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     fn scroll(&mut self, scroll: Scroll) {
         let old_offset = self.terminal.grid().display_offset() as i32;
 
+        let old_vi_cursor = self.terminal.vi_mode_cursor;
         self.terminal.scroll_display(scroll);
 
         let lines_changed = old_offset - self.terminal.grid().display_offset() as i32;
@@ -260,10 +262,10 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             self.search_state.display_offset_delta += lines_changed;
         }
 
+        let vi_mode = self.terminal.mode().contains(TermMode::VI);
+
         // Update selection.
-        if self.terminal.mode().contains(TermMode::VI)
-            && self.terminal.selection.as_ref().map_or(false, |s| !s.is_empty())
-        {
+        if vi_mode && self.terminal.selection.as_ref().map_or(false, |s| !s.is_empty()) {
             self.update_selection(self.terminal.vi_mode_cursor.point, Side::Right);
         } else if self.mouse.left_button_state == ElementState::Pressed
             || self.mouse.right_button_state == ElementState::Pressed
@@ -273,8 +275,14 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             self.update_selection(point, self.mouse.cell_side);
         }
 
-        // Update dirty if actually scrolled or we're in the Vi mode.
-        *self.dirty |= lines_changed != 0;
+        // Scrolling inside Vi mode moves the cursor, so start typing.
+        if vi_mode {
+            self.on_typing_start();
+        }
+
+        // Update dirty if actually scrolled or moved Vi cursor in Vi mode.
+        *self.dirty |=
+            lines_changed != 0 || (vi_mode && old_vi_cursor != self.terminal.vi_mode_cursor);
     }
 
     // Copy text selection.
@@ -284,8 +292,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             None => return,
         };
 
-        if ty == ClipboardType::Selection && self.config.terminal_config.selection.save_to_clipboard
-        {
+        if ty == ClipboardType::Selection && self.config.selection.save_to_clipboard {
             self.clipboard.store(ClipboardType::Clipboard, text.clone());
         }
         self.clipboard.store(ty, text);
@@ -479,7 +486,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     #[inline]
     fn start_search(&mut self, direction: Direction) {
         // Only create new history entry if the previous regex wasn't empty.
-        if self.search_state.history.get(0).map_or(true, |regex| !regex.is_empty()) {
+        if self.search_state.history.front().map_or(true, |regex| !regex.is_empty()) {
             self.search_state.history.push_front(String::new());
             self.search_state.history.truncate(MAX_SEARCH_HISTORY_SIZE);
         }
@@ -1033,10 +1040,10 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
     /// Update the cursor blinking state.
     fn update_cursor_blinking(&mut self) {
         // Get config cursor style.
-        let mut cursor_style = self.config.terminal_config.cursor.style;
+        let mut cursor_style = self.config.cursor.style;
         let vi_mode = self.terminal.mode().contains(TermMode::VI);
         if vi_mode {
-            cursor_style = self.config.terminal_config.cursor.vi_mode_style.unwrap_or(cursor_style);
+            cursor_style = self.config.cursor.vi_mode_style.unwrap_or(cursor_style);
         }
 
         // Check terminal cursor style.
@@ -1066,23 +1073,21 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         let window_id = self.display.window.id();
         let timer_id = TimerId::new(Topic::BlinkCursor, window_id);
         let event = Event::new(EventType::BlinkCursor, window_id);
-        let blinking_interval =
-            Duration::from_millis(self.config.terminal_config.cursor.blink_interval());
+        let blinking_interval = Duration::from_millis(self.config.cursor.blink_interval());
         self.scheduler.schedule(event, blinking_interval, true, timer_id);
     }
 
     fn schedule_blinking_timeout(&mut self) {
-        let blinking_timeout = self.config.terminal_config.cursor.blink_timeout();
-        if blinking_timeout == 0 {
+        let blinking_timeout = self.config.cursor.blink_timeout();
+        if blinking_timeout == Duration::ZERO {
             return;
         }
 
         let window_id = self.display.window.id();
-        let blinking_timeout_interval = Duration::from_secs(blinking_timeout);
         let event = Event::new(EventType::BlinkCursorTimeout, window_id);
         let timer_id = TimerId::new(Topic::BlinkTimeout, window_id);
 
-        self.scheduler.schedule(event, blinking_timeout_interval, false, timer_id);
+        self.scheduler.schedule(event, blinking_timeout, false, timer_id);
     }
 
     /// Perform vi mode inline search in the specified direction.
@@ -1268,8 +1273,12 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 EventType::SearchNext => self.ctx.goto_match(None),
                 EventType::Scroll(scroll) => self.ctx.scroll(scroll),
                 EventType::BlinkCursor => {
-                    self.ctx.display.cursor_hidden ^= true;
-                    *self.ctx.dirty = true;
+                    // Only change state when timeout isn't reached, since we could get
+                    // BlinkCursor and BlinkCursorTimeout events at the same time.
+                    if !*self.ctx.cursor_blink_timed_out {
+                        self.ctx.display.cursor_hidden ^= true;
+                        *self.ctx.dirty = true;
+                    }
                 },
                 EventType::BlinkCursorTimeout => {
                     // Disable blinking after timeout reached.
@@ -1324,8 +1333,9 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                     },
                     TerminalEvent::ColorRequest(index, format) => {
                         let color = self.ctx.terminal().colors()[index]
+                            .map(Rgb)
                             .unwrap_or(self.ctx.display.colors[index]);
-                        self.ctx.write_to_pty(format(color).into_bytes());
+                        self.ctx.write_to_pty(format(color.0).into_bytes());
                     },
                     TerminalEvent::TextAreaSizeRequest(format) => {
                         let text = format(self.ctx.size_info().into());
@@ -1386,7 +1396,7 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                         self.ctx.terminal.is_focused = is_focused;
 
                         // When the unfocused hollow is used we must redraw on focus change.
-                        if self.ctx.config.terminal_config.cursor.unfocused_hollow {
+                        if self.ctx.config.cursor.unfocused_hollow {
                             *self.ctx.dirty = true;
                         }
 
@@ -1476,7 +1486,7 @@ pub struct Processor {
     windows: HashMap<WindowId, WindowContext, RandomState>,
     gl_display: Option<GlutinDisplay>,
     #[cfg(unix)]
-    global_ipc_options: Vec<String>,
+    global_ipc_options: ParsedOptions,
     cli_options: CliOptions,
     config: Rc<UiConfig>,
 }
@@ -1528,17 +1538,16 @@ impl Processor {
     ) -> Result<(), Box<dyn Error>> {
         let window = self.windows.iter().next().as_ref().unwrap().1;
 
+        // Overide config with CLI/IPC options.
+        let mut config_overrides = options.config_overrides();
+        #[cfg(unix)]
+        config_overrides.extend_from_slice(&self.global_ipc_options);
+        let mut config = self.config.clone();
+        config = config_overrides.override_config_rc(config);
+
         #[allow(unused_mut)]
         let mut window_context =
-            window.additional(event_loop, proxy, self.config.clone(), options)?;
-
-        // Apply global IPC options.
-        #[cfg(unix)]
-        {
-            let options = self.global_ipc_options.clone();
-            let ipc_config = IpcConfig { options, window_id: None, reset: false };
-            window_context.update_ipc_config(self.config.clone(), ipc_config);
-        }
+            window.additional(event_loop, proxy, config, options, config_overrides)?;
 
         self.windows.insert(window_context.id(), window_context);
         Ok(())
@@ -1710,7 +1719,7 @@ impl Processor {
                     }
 
                     // Load config and update each terminal.
-                    if let Ok(config) = config::reload(&path, &self.cli_options) {
+                    if let Ok(config) = config::reload(&path, &mut self.cli_options) {
                         self.config = Rc::new(config);
 
                         for window_context in self.windows.values_mut() {
@@ -1724,21 +1733,29 @@ impl Processor {
                     payload: EventType::IpcConfig(ipc_config),
                     window_id,
                 }) => {
-                    // Persist global options for future windows.
-                    if window_id.is_none() {
-                        if ipc_config.reset {
-                            self.global_ipc_options.clear();
-                        } else {
-                            self.global_ipc_options.extend_from_slice(&ipc_config.options);
-                        }
-                    }
+                    // Try and parse options as toml.
+                    let mut options = ParsedOptions::from_options(&ipc_config.options);
 
+                    // Override IPC config for each window with matching ID.
                     for (_, window_context) in self
                         .windows
                         .iter_mut()
                         .filter(|(id, _)| window_id.is_none() || window_id == Some(**id))
                     {
-                        window_context.update_ipc_config(self.config.clone(), ipc_config.clone());
+                        if ipc_config.reset {
+                            window_context.reset_window_config(self.config.clone());
+                        } else {
+                            window_context.add_window_config(self.config.clone(), &options);
+                        }
+                    }
+
+                    // Persist global options for future windows.
+                    if window_id.is_none() {
+                        if ipc_config.reset {
+                            self.global_ipc_options.clear();
+                        } else {
+                            self.global_ipc_options.append(&mut options);
+                        }
                     }
                 },
                 // Create a new terminal window.

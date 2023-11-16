@@ -25,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Debug option `prefer_egl` to prioritize EGL over other display APIs
 - Inline vi-mode search using `f`/`F`/`t`/`T`
 - `window.blur` config option to request blur for transparent windows
+- `--option` argument for `alacritty msg create-window`
 
 ### Changed
 
@@ -45,6 +46,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Synchronized updates now use `CSI 2026` instead of legacy `DCS` variant
 - In mouse mode with `Shift` pressed, mouse bindings without `Shift` are only triggered
     if no exact binding (i.e. one with `Shift`) is found.
+- Use built-in font for powerline symbols from `U+E0B0` to `U+E0B3`
+- Default `bell.animation` is now `Linear`
 
 ### Fixed
 
@@ -65,6 +68,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Crash on exit when using NVIDIA binary drivers on Wayland
 - `window.startup_mode` applied to window again when creating new tab
 - Crash when leaving search after resize
+- Cursor being hidden after reaching cursor blinking timeout
+- Message bar content getting stuck after closing with multiple messages on Wayland
+- Vi cursor position not redrawn on PageUp/PageDown without scrollback
 
 ### Removed
 

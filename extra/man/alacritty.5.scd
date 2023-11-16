@@ -256,7 +256,8 @@ macOS:     _{ family = "Menlo",     style = "Regular" }_
 *builtin_box_drawing* <boolean>
 
 	When _true_, Alacritty will use a custom built-in font for box drawing
-	characters (Unicode points _U+2500_ - _U+259f_).
+	characters (Unicode points _U+2500_ - _U+259F_) and powerline symbols
+	(Unicode points _U+E0B0_ - _U+E0B3_).
 
 	Default: _true_
 
@@ -460,7 +461,7 @@ This section documents the *[bell]* table of the configuration file.
 
 	Visual bell animation effect for flashing the screen when the visual bell is rung.
 
-	Default: _"EaseOutExpo"_
+	Default: _"Linear"_
 
 *duration* <integer>
 
