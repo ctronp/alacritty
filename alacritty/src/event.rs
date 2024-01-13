@@ -1,7 +1,7 @@
 //! Process window events.
 
 use std::borrow::Cow;
-use std::cmp::{max, min};
+use std::cmp::min;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::ffi::OsStr;
@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use std::{env, f32, mem};
 
 use ahash::RandomState;
-use crossfont::{self, Size};
+use crossfont::Size as FontSize;
 use glutin::display::{Display as GlutinDisplay, GetGlDisplay};
 use log::{debug, error, info, warn};
 use raw_window_handle::HasRawDisplayHandle;
@@ -222,7 +222,6 @@ pub struct ActionContext<'a, N, T> {
     pub scheduler: &'a mut Scheduler,
     pub search_state: &'a mut SearchState,
     pub inline_search_state: &'a mut InlineSearchState,
-    pub font_size: &'a mut Size,
     pub dirty: &'a mut bool,
     pub occluded: &'a mut bool,
     pub preserve_title: bool,
@@ -465,14 +464,19 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     }
 
     fn change_font_size(&mut self, delta: f32) {
-        *self.font_size = max(*self.font_size + delta, Size::new(FONT_SIZE_STEP));
-        let font = self.config.font.clone().with_size(*self.font_size);
+        // Round to pick integral px steps, since fonts look better on them.
+        let new_size = self.display.font_size.as_px().round() + delta;
+        self.display.font_size = FontSize::from_px(new_size);
+        let font = self.config.font.clone().with_size(self.display.font_size);
         self.display.pending_update.set_font(font);
     }
 
     fn reset_font_size(&mut self) {
-        *self.font_size = self.config.font.size();
-        self.display.pending_update.set_font(self.config.font.clone());
+        let scale_factor = self.display.window.scale_factor as f32;
+        self.display.font_size = self.config.font.size().scale(scale_factor);
+        self.display
+            .pending_update
+            .set_font(self.config.font.clone().with_size(self.display.font_size));
     }
 
     #[inline]
@@ -517,7 +521,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         // Enable IME so we can input into the search bar with it if we were in Vi mode.
         self.window().set_ime_allowed(true);
 
-        self.terminal.mark_fully_damaged();
+        self.display.damage_tracker.frame().mark_fully_damaged();
         self.display.pending_update.dirty = true;
     }
 
@@ -835,13 +839,23 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
         } else {
             self.on_terminal_input_start();
 
-            // In non-bracketed (ie: normal) mode, terminal applications cannot distinguish
-            // pasted data from keystrokes.
-            // In theory, we should construct the keystrokes needed to produce the data we are
-            // pasting... since that's neither practical nor sensible (and probably an impossible
-            // task to solve in a general way), we'll just replace line breaks (windows and unix
-            // style) with a single carriage return (\r, which is what the Enter key produces).
-            self.write_to_pty(text.replace("\r\n", "\r").replace('\n', "\r").into_bytes());
+            let payload = if bracketed {
+                // In non-bracketed (ie: normal) mode, terminal applications cannot distinguish
+                // pasted data from keystrokes.
+                //
+                // In theory, we should construct the keystrokes needed to produce the data we are
+                // pasting... since that's neither practical nor sensible (and probably an
+                // impossible task to solve in a general way), we'll just replace line breaks
+                // (windows and unix style) with a single carriage return (\r, which is what the
+                // Enter key produces).
+                text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
+            } else {
+                // When we explicitly disable bracketed paste don't manipulate with the input,
+                // so we pass user input as is.
+                text.to_owned().into_bytes()
+            };
+
+            self.write_to_pty(payload);
         }
     }
 
@@ -853,10 +867,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             // If we had search running when leaving Vi mode we should mark terminal fully damaged
             // to cleanup highlighted results.
             if self.search_state.dfas.take().is_some() {
-                self.terminal.mark_fully_damaged();
-            } else {
-                // Damage line indicator.
-                self.terminal.damage_line(0, 0, self.terminal.columns() - 1);
+                self.display.damage_tracker.frame().mark_fully_damaged();
             }
         } else {
             self.clear_selection();
@@ -1029,7 +1040,7 @@ impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
         let vi_mode = self.terminal.mode().contains(TermMode::VI);
         self.window().set_ime_allowed(!vi_mode);
 
-        self.terminal.mark_fully_damaged();
+        self.display.damage_tracker.frame().mark_fully_damaged();
         self.display.pending_update.dirty = true;
         self.search_state.history_index = None;
 
@@ -1357,13 +1368,17 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 match event {
                     WindowEvent::CloseRequested => self.ctx.terminal.exit(),
                     WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                        self.ctx.window().scale_factor = scale_factor;
+                        let old_scale_factor =
+                            mem::replace(&mut self.ctx.window().scale_factor, scale_factor);
 
                         let display_update_pending = &mut self.ctx.display.pending_update;
 
-                        // Push current font to update its scale factor.
+                        // Rescale font size for the new factor.
+                        let font_scale = scale_factor as f32 / old_scale_factor as f32;
+                        self.ctx.display.font_size = self.ctx.display.font_size.scale(font_scale);
+
                         let font = self.ctx.config.font.clone();
-                        display_update_pending.set_font(font.with_size(*self.ctx.font_size));
+                        display_update_pending.set_font(font.with_size(self.ctx.display.font_size));
                     },
                     WindowEvent::Resized(size) => {
                         // Ignore resize events to zero in any dimension, to avoid issues with Winit

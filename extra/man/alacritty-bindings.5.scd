@@ -2,14 +2,14 @@ ALACRITTY-BINDINGS(5)
 
 # NAME
 
-Alacritty Bindings - Default configuration file bindings
+Alacritty Bindings - Default configuration file bindings.
 
 # SYNOPSIS
 
 This page documents all key and mouse bindings for the default Alacritty
 configuration. See *alacritty*(5) for full configuration format documentation.
 
-# Mouse Bindings
+# MOUSE BINDINGS
 
 [[ *mouse*
 :[ *mods*
@@ -24,7 +24,7 @@ configuration. See *alacritty*(5) for full configuration format documentation.
 :  _"~Vi"_
 :  _"PasteSelection"_
 
-# Key Bindings
+# KEY BINDINGS
 
 [[ *key*
 :[ *mods*
@@ -42,6 +42,10 @@ configuration. See *alacritty*(5) for full configuration format documentation.
 :  _"Control"_
 :[
 :  _"ClearLogNotice"_
+|  _"Paste"_
+:[
+:  _"Vi|Search"_
+:  _"Paste"_
 |  _"L"_
 :  _"Control"_
 :  _"~Vi|~Search"_
@@ -273,7 +277,7 @@ configuration. See *alacritty*(5) for full configuration format documentation.
 :[
 :  _"Vi|~Search"_
 :  _"SearchForward"_
-|  _"/"_
+|  _"?"_
 :  _"Shift"_
 :  _"Vi|~Search"_
 :  _"SearchBackward"_
@@ -343,6 +347,10 @@ configuration. See *alacritty*(5) for full configuration format documentation.
 |  _"V"_
 :  _"Control|Shift"_
 :  _"~Vi"_
+:  _"Paste"_
+|  _"V"_
+:  _"Control|Shift"_
+:  _"Vi|Search"_
 :  _"Paste"_
 |  _"C"_
 :  _"Control|Shift"_
@@ -440,7 +448,11 @@ configuration. See *alacritty*(5) for full configuration format documentation.
 :  _"DecreaseFontSize"_
 |  _"V"_
 :  _"Command"_
-:[
+:  _"~Vi"_
+:  _"Paste"_
+|  _"V"_
+:  _"Command"_
+:  _"Vi|Search"_
 :  _"Paste"_
 |  _"C"_
 :  _"Command"_
@@ -538,7 +550,7 @@ configuration. See *alacritty*(5) for full configuration format documentation.
 :  _"Command"_
 :[
 :  _"SelectTab8"_
-|  _"2 9"_
+|  _"9"_
 :  _"Command"_
 :[
 :  _"SelectLastTab"_
@@ -547,12 +559,9 @@ configuration. See *alacritty*(5) for full configuration format documentation.
 
 *alacritty*(1), *alacritty-msg*(1), *alacritty*(5)
 
-See the alacritty github repository at https://github.com/alacritty/alacritty
-for the full documentation.
-
 # BUGS
 
-Found a bug? Please report it at https://github.com/alacritty/alacritty/issues.
+Found a bug? Please report it at _https://github.com/alacritty/alacritty/issues_.
 
 # MAINTAINERS
 
